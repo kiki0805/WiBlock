@@ -79,6 +79,7 @@ class BlockChain(object):
         block_string = json.dumps(block, sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
 
+
 from flask import Flask, request
 from peewee import *
 from playhouse.shortcuts import model_to_dict
@@ -119,10 +120,19 @@ def register():
     auth_coin_json = json.dumps(auth_coin_dic)
 
     public_key = RSA.importKey(data['public_key'])
-    enc_auth_coin = public_key.encrypt(auth_coin_json.encode(), 32)
+    auth_coin_encoded = auth_coin_json.encode()
+    length = len(auth_coin_encoded)
+    enc_auth_coin = {}
+    import math
+    for i in range(math.ceil(length / 128)):
+        start = i * 128
+        end = start + 128
+        if end >= length:
+            end = -1
+        enc_auth_coin[i] = str(public_key.encrypt(auth_coin_encoded[start: end], 32)[0])
 
-    signature = server_private_key.sign(SHA256.new(enc_auth_coin[0]).digest(), '')
-    response_data = {'auth_coin': str(enc_auth_coin), 'signature': signature}
+    signature = server_private_key.sign(SHA256.new(json.dumps(enc_auth_coin).encode()).digest(), '')
+    response_data = {'auth_coin': json.dumps(enc_auth_coin), 'signature': signature}
     json_data = json.dumps(response_data)
 
     blockchain.generate_transaction(coin_type=CoinType.AuthCoin,
@@ -143,7 +153,7 @@ def flask_generate_transaction():
             recipient=data['recipient'],
             amount=data['amount'])
     #Todo broadcast TX
-    response = {'message': 'Transaction generated successfully!'}
+    response = {'success_message': 'Transaction generated successfully!'}
     return json.dumps(response)
 
 
@@ -155,6 +165,22 @@ def get_chain():
     }
     return json.dumps(response)
 
+
+@WiBlock.route('/coin_owner', methods=['GET'])
+def get_coin_owner():
+    asset_id = request.data.decode()
+    registration = Registration.get(Registration.asset_id == asset_id)
+    public_key = registration.public_key
+    response = {'public_key': public_key}
+    return json.dumps(response)
+
+
+@WiBlock.route('/transactions/current', methods=['GET'])
+def get_current_transactions():
+    response = {
+        'current_transactions': blockchain.current_transactions,        
+    }
+    return json.dumps(response)
 
 
 

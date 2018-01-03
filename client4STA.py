@@ -9,33 +9,48 @@ s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 s.connect((HOST,PORT))
 s.setblocking(0)
 
+REGISTERED = False
+wallet = None
 
 def handle_recv(msg_recv):
-    print('handle_recv()...')
     msg_encoded = msg_recv.encode()
     dic_data = json.loads(msg_encoded)
 
-    if 'message' in dic_data:
+    if 'success_message' in dic_data:
         #Todo connect and check if TX is broadcasted
-        print(dic_data['message'])
+        print('Connect Successfully!')
+        wallet.auth_coin = None
+        return
+    elif 'fail_message' in dic_data:
         return
 
     if 'auth_coin' in dic_data:
         #Todo store AuthCoin
+        wallet.auth_coin = dic_data
+        with open('AUTHCOIN', 'wb') as ac_f:
+            ac_f.write(msg_encoded)
+            ac_f.close()
         return
 
     signature = wallet.privkey.sign(SHA256.new(msg_encoded).digest(), '')
     data = {}
     data['raw'] = json.loads(msg_recv)
     data['signature'] = signature
+    data['auth_coin'] = wallet.auth_coin
+    auth_coin_enc = wallet.auth_coin['auth_coin']
+    json_auth_coin = json.loads(auth_coin_enc)
+    auth_coin = b''
+    for i in range(len(json_auth_coin)):
+        auth_coin += wallet.privkey.decrypt(eval(json_auth_coin[str(i)]))
+    auth_coin += b'}'
+    auth_coin = json.loads(auth_coin.decode())
+    data['id'] = auth_coin['id'] 
     speak(json.dumps(data).encode())
 
 
 def speak(msg):
     global s
-    print('Send Start')
     s.send(msg)
-    print('Send End')
 
 
 def start_read():
@@ -84,6 +99,7 @@ with open('SERVER_PUBLIC', 'r') as f:
 
 class AuthWallet(object):
     def __init__(self, info, empty=False):
+        self.auth_coin = None
         if empty:
             self.privkey, self.pubkey, self.private_key, self.public_key, self.pub_file = None, None, None, None, None
             self.address = None
@@ -153,6 +169,7 @@ def get_mac_address():
 
 
 def register():
+    global wallet
     MAC = get_mac_address()
 
     print('Fill your information...')
@@ -187,7 +204,7 @@ def register():
     speak(json.dumps(enc_data).encode())
 
 
-wallet = None
+
 import os
 files = os.listdir(os.getcwd())
 if 'PRIVATE' in files and 'PUBLIC' in files:
@@ -210,15 +227,34 @@ if 'PRIVATE' in files and 'PUBLIC' in files:
         address = addr_f.read()
         wallet.address = address
         addr_f.close()
+
+    with open('AUTHCOIN', 'r') as ac_f:
+        auth_coin = ac_f.read()
+        wallet.auth_coin = eval(auth_coin)
+        ac_f.close()
+    REGISTERED = True
 else:
-    print('STA REGISTER...')
+    print('==============STA REGISTER=================')
     register()
-    print('STA REGISTRATION FINISH')
+    print('===========STA REGISTRATION FINISH=========')
+    REGISTERED = True
 
-#connect to AP and notifies AP public
-message = wallet.pub_file.encode()
-speak(message)
 
-print('Disconnect')
+while not REGISTERED:
+    time.sleep(3)
+
+time.sleep(1)
+
+while True:
+    confirm_connect = input('Do you want to connect?(y/N)\n')
+    if confirm_connect == 'y':
+        message = wallet.pub_file.encode()
+        #connect to AP and notifies AP public
+        speak(message)
+        break
+    else:
+        print('System will ask for connection every five seconds...')
+        time.sleep(5)
+
 
 

@@ -12,6 +12,7 @@ import uuid
 import rsa
 
 
+user_public_keys = {}
 server_public_key = None
 with open('SERVER_PUBLIC', 'r') as f:
     server_pub_file = f.read()
@@ -21,6 +22,7 @@ with open('SERVER_PUBLIC', 'r') as f:
 
 class AuthWallet(object):
     def __init__(self, info, empty=False):
+        self.auth_coins = {}
         if empty:
             self.privkey, self.pubkey, self.private_key, self.public_key, self.pub_file = None, None, None, None, None
             self.address = None
@@ -89,6 +91,7 @@ def get_mac_address():
     return ":".join([mac[e:e+2] for e in range(0,11,2)])
 
 def register():
+    global wallet
     MAC = get_mac_address()
 
     print('Fill your information...')
@@ -107,20 +110,21 @@ def register():
     }
 
     wallet = AuthWallet(info=info)
-    message = {'public_key': wallet.pub_file, 'info': info, 'address': wallet.address}
-    data = json.dumps(message)
-    data = data.encode()
-    length = len(data)
-    enc_data = {}
-    import math
-    for i in range(math.ceil(length / 128)):
-        start = i * 128
-        end = start + 128
-        if end >= length:
-            end = -1
-        enc_data[i] = str(server_public_key.encrypt(data[start: end], 32)[0])
-    #enc_data = server_public_key.encrypt(data, 32)
-    handle_data(json.dumps(enc_data).encode())
+    #Todo register for AP
+    #message = {'public_key': wallet.pub_file, 'info': info, 'address': wallet.address}
+    #data = json.dumps(message)
+    #data = data.encode()
+    #length = len(data)
+    #enc_data = {}
+    #import math
+    #for i in range(math.ceil(length / 128)):
+    #    start = i * 128
+    #    end = start + 128
+    #    if end >= length:
+    #        end = -1
+    #    enc_data[i] = str(server_public_key.encrypt(data[start: end], 32)[0])
+    ##enc_data = server_public_key.encrypt(data, 32)
+    #handle_data(json.dumps(enc_data).encode())
 
 
 wallet = None
@@ -153,32 +157,52 @@ else:
 
 ########## ABOVE is AP WALLET GENERATOR #################
 
-def handle_data(data):
+def handle_data(data, ip, port):
     #data_decoded = data.decode()
     #res = generate_transaction(data_decoded)
     #return res
+    global user_public_keys
+    data_decoded = data.decode()
+    
     try:
-        print('Try to decode message')
-        data_decoded = data.decode()
-        try:
-            print('Try to decode signature')
-            dic_data = json.loads(data_decoded)
-            validate = verify_signature(dic_data)
-            if validate:
-                res = requests.post('http://127.0.0.1:5000/transactions/generate', data=data)
-                res = res.text
-        except:
-            print('Not a dic. Regard as public_key')
-            res = generate_transaction(data_decoded)
-        return res
+        dic_data = json.loads(data_decoded)
     except:
-        print('Fail decode. POST to registrate.')
+        print('Receive public_key. To generate TX')
+        res = generate_transaction(data_decoded)
+        user_public_keys[(ip, port)] = data_decoded
+        return res
+
+    if '0' in dic_data:
+        print('POST to registrate...')
         res = requests.post('http://127.0.0.1:5000/register', data=data)
         return res.text
 
+    print('Detected signature')
+    validate = verify_signature(dic_data, ip, port)
+    if not validate:
+        print('Validation Fail!')
+        #Disconnect
+        message = {'fail_message': 'Validation Fail!'}
+        return json.dumps(message)
+    res = requests.post('http://127.0.0.1:5000/transactions/generate', data=data)
+    return res.text
 
-def verify_signature(tx_with_sign):
-    return True
+
+
+def verify_signature(tx_with_sign, ip, port):
+    global user_public_keys
+    from Crypto.Hash import SHA256
+    user_info = (ip, port)
+    auth_coin = tx_with_sign['auth_coin']
+    wallet.auth_coins[(ip, port)] = auth_coin
+    user_pubkey = RSA.importKey(user_public_keys[(ip, port)])
+    #search owner of C
+    owner_public_key = json.loads(requests.get('http://127.0.0.1:5000/coin_owner', data=tx_with_sign['id'].encode()).text)
+    if owner_public_key['public_key'] != user_public_keys[(ip, port)]: return False
+    auth_coin_content = auth_coin['auth_coin']
+    server_signature = auth_coin['signature']
+    validate = server_public_key.verify(SHA256.new(auth_coin_content.encode()).digest(), server_signature)
+    return validate
 
 
 def generate_transaction(public_key):
@@ -232,8 +256,10 @@ class ClientThread(Thread):
         while True:
             data = conn.recv(9999)
             if not data: break
-            response = handle_data(data)
-            print(response)
+            response = handle_data(data, self.ip, self.port)
+            #print(response)
+            if not response:
+                continue
             conn.send(response.encode())
 
 TCP_IP = '0.0.0.0'
