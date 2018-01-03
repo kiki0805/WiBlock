@@ -10,9 +10,32 @@ s.connect((HOST,PORT))
 s.setblocking(0)
 
 
+def handle_recv(msg_recv):
+    print('handle_recv()...')
+    msg_encoded = msg_recv.encode()
+    dic_data = json.loads(msg_encoded)
+
+    if 'message' in dic_data:
+        #Todo connect and check if TX is broadcasted
+        print(dic_data['message'])
+        return
+
+    if 'auth_coin' in dic_data:
+        #Todo store AuthCoin
+        return
+
+    signature = wallet.privkey.sign(SHA256.new(msg_encoded).digest(), '')
+    data = {}
+    data['raw'] = json.loads(msg_recv)
+    data['signature'] = signature
+    speak(json.dumps(data).encode())
+
+
 def speak(msg):
-	global s
-	s.send(msg)
+    global s
+    print('Send Start')
+    s.send(msg)
+    print('Send End')
 
 
 def start_read():
@@ -27,7 +50,7 @@ def start_read():
 				data = sock.recv(9999)
 				astr = data.decode()
 				if astr != "":
-					print(astr)
+					handle_recv(astr)
 		time.sleep(0.1)
 
 
@@ -43,6 +66,7 @@ def close_sock(s):
 
 from secp256k1 import PrivateKey, PublicKey
 from Crypto.PublicKey import RSA
+from Crypto.Hash import SHA256
 from Crypto import Random
 import hashlib
 import base58
@@ -59,7 +83,12 @@ with open('SERVER_PUBLIC', 'r') as f:
 
 
 class AuthWallet(object):
-    def __init__(self, info):
+    def __init__(self, info, empty=False):
+        if empty:
+            self.privkey, self.pubkey, self.private_key, self.public_key, self.pub_file = None, None, None, None, None
+            self.address = None
+            self.info = None
+            return
         self.privkey, self.pubkey, self.private_key, self.public_key, self.pub_file = self.generate_keys()
         self.address = self.generate_address(self.public_key)
         self.info = info
@@ -112,6 +141,9 @@ class AuthWallet(object):
         head_added = b'0' + h.digest()
         tail = hashlib.sha256(hashlib.sha256(head_added).digest()).digest()[:4]
         address = base58.b58encode(head_added + tail)
+        with open('ADDRESS', 'w') as f:
+            f.write(address)
+            f.close()
         return address
 
 
@@ -119,38 +151,74 @@ def get_mac_address():
     mac=uuid.UUID(int = uuid.getnode()).hex[-12:]
     return ":".join([mac[e:e+2] for e in range(0,11,2)])
 
-MAC = get_mac_address()
 
-print('Fill your information...')
-print('(optional, press <Enter> to skip)')
-username = input('Username: ')
-email = input('Email: ')
-tel = input('Tel: ')
-message = input('Message: ')
+def register():
+    MAC = get_mac_address()
 
-info = {
-    'MAC': MAC,
-    'Username': username,
-    'Email': email,
-    'Tel': tel,
-    'Message': message,
-}
+    print('Fill your information...')
+    print('(optional, press <Enter> to skip)')
+    username = input('Username: ')
+    email = input('Email: ')
+    tel = input('Tel: ')
+    message = input('Message: ')
 
-wallet = AuthWallet(info=info)
-message = {'public_key': wallet.pub_file, 'info': info, 'address': wallet.address}
-data = json.dumps(message)
-data = data.encode()
-length = len(data)
-enc_data = {}
-import math
-for i in range(math.ceil(length / 128)):
-    start = i * 128
-    end = start + 128
-    if end >= length:
-        end = -1
-    enc_data[i] = str(server_public_key.encrypt(data[start: end], 32)[0])
-#enc_data = server_public_key.encrypt(data, 32)
-speak(json.dumps(enc_data).encode())
+    info = {
+        'MAC': MAC,
+        'Username': username,
+        'Email': email,
+        'Tel': tel,
+        'Message': message,
+    }
 
+    wallet = AuthWallet(info=info)
+    message = {'public_key': wallet.pub_file, 'info': info, 'address': wallet.address}
+    data = json.dumps(message)
+    data = data.encode()
+    length = len(data)
+    enc_data = {}
+    import math
+    for i in range(math.ceil(length / 128)):
+        start = i * 128
+        end = start + 128
+        if end >= length:
+            end = -1
+        enc_data[i] = str(server_public_key.encrypt(data[start: end], 32)[0])
+    #enc_data = server_public_key.encrypt(data, 32)
+    speak(json.dumps(enc_data).encode())
+
+
+wallet = None
+import os
+files = os.listdir(os.getcwd())
+if 'PRIVATE' in files and 'PUBLIC' in files:
+    wallet = AuthWallet(info=None, empty=True)
+    with open('PRIVATE', 'r') as priv_f:
+        privkey = RSA.importKey(priv_f.read())
+        wallet.privkey = privkey
+
+        priv_f.close()
+
+    with open('PUBLIC', 'r') as pub_f:
+        pub_file = pub_f.read()
+        wallet.pub_file = pub_file
+        pubkey = RSA.importKey(pub_file)
+        wallet.pubkey = pubkey
+
+        pub_f.close()
+
+    with open('ADDRESS', 'r') as addr_f:
+        address = addr_f.read()
+        wallet.address = address
+        addr_f.close()
+else:
+    print('STA REGISTER...')
+    register()
+    print('STA REGISTRATION FINISH')
+
+#connect to AP and notifies AP public
+message = wallet.pub_file.encode()
+speak(message)
+
+print('Disconnect')
 
 

@@ -135,7 +135,16 @@ def register():
 
 @WiBlock.route('/transactions/generate', methods=['POST'])
 def flask_generate_transaction():
-    pass
+    data = json.loads(request.data.decode())['raw']
+    ##Todo checks required fields
+    index = blockchain.generate_transaction(coin_type=data['coin_type'],
+            trans_type=data['trans_type'],
+            sender=data['sender'],
+            recipient=data['recipient'],
+            amount=data['amount'])
+    #Todo broadcast TX
+    response = {'message': 'Transaction generated successfully!'}
+    return json.dumps(response)
 
 
 @WiBlock.route('/chain', methods=['GET'])
@@ -144,7 +153,7 @@ def get_chain():
         'chain': blockchain.chain,
         'length': len(blockchain.chain),
     }
-    return jsonify(response), 200
+    return json.dumps(response)
 
 
 
