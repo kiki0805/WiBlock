@@ -33,11 +33,54 @@ with open('SERVER_ADDRESS', 'r') as f:
 
 ################## END IDENTIFICATION #########################
 
+from urllib.parse import urlparse
+
 class BlockChain(object):
     def __init__(self):
         self.chain = []
+        self.nodes = set()
         self.current_transactions = []
         self.create_block(previous_hash=1, proof=100)
+
+    def register_node(self, address):
+        parsed_url = urlparse(address)
+        self.nodes.add(parsed_url.netloc)
+
+    def valid_chain(self, chain):
+        for i in range(len(chain) - 1):
+            former_block = chain[i]
+            current_block = chain[i + 1]
+
+            if current_block['previous_hash'] != self.hash(former_block):
+                return False
+
+            if not self.valid_proof(current_block['proof'], former_block['proof']):
+                return False
+
+        return True
+
+    def resolve_conflicts(self):
+        neighbours = self.nodes
+        new_chain = None
+
+        max_length = len(self.chain)
+
+        for node in neighbours:
+            response = requests.get(f'http://{node}/chain')
+
+            if response.status_code == 200:
+                length = response.json()['length']
+                chain = response.json()['chain']
+
+                if length > max_length and self.valid_chain(chain):
+                    max_length = length
+                    new_chain = chain
+
+        if new_chain:
+            self.chain = new_chain
+            return True
+
+        return False
 
     def create_block(self, proof, previous_hash=None):
         block = {
@@ -79,6 +122,18 @@ class BlockChain(object):
         block_string = json.dumps(block, sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
 
+    def proof_of_work(self, last_proof):
+        proof = 0
+        while self.valid_proof(proof, last_proof) is False:
+            proof += 1
+        return proof
+
+    @staticmethod
+    def valid_proof(proof, last_proof):
+        guess = f'{last_proof}{proof}'.encode()
+        guess_hash = hashlib.sha256(guess).hexdigest()
+        return guess_hash[:4] == '0000'
+
 
 from flask import Flask, request
 from peewee import *
@@ -101,6 +156,23 @@ db.connect()
 
 
 blockchain = BlockChain()
+
+
+@WiBlock.route('/register4AP', methods=['POST'])
+def register4AP():
+    enc_data = request.data
+    json_data = json.loads(enc_data.decode())
+    data = b''
+    for i in range(len(json_data)):
+        data += server_private_key.decrypt(eval(json_data[str(i)]))
+    data += b'}'
+    data = json.loads(data.decode())
+    registration = Registration(info=data['info'], public_key=data['public_key'], asset_id='')
+    registration.save()
+    
+    response = {'success_message': 'Register Successfully!'}
+    return json.dumps(response)
+
 
 
 @WiBlock.route('/register', methods=['POST'])
@@ -137,15 +209,22 @@ def register():
 
     blockchain.generate_transaction(coin_type=CoinType.AuthCoin,
             trans_type=TransType.ISSUE,
-            sender=server_address,
-            recipient=data['address'],
+            sender=server_public_key.exportKey(),
+            recipient=data['public_key'],
             amount=1)
     return json_data
 
 
 @WiBlock.route('/transactions/generate', methods=['POST'])
 def flask_generate_transaction():
-    data = json.loads(request.data.decode())['raw']
+    data = json.loads(request.data.decode())
+    signature = data['signature']
+    data = data['raw']
+    public_key = RSA.importKey(data['sender'])
+    if not public_key.verify(SHA256.new(json.dumps(data).encode()).digest(), signature):
+        response = {'fail_message': 'Invalid Transaction.'}
+        return json.dumps(response), 400
+
     ##Todo checks required fields
     index = blockchain.generate_transaction(coin_type=data['coin_type'],
             trans_type=data['trans_type'],
@@ -183,7 +262,65 @@ def get_current_transactions():
     return json.dumps(response)
 
 
+@WiBlock.route('/mine', methods=['GET'])
+def mine():
+    last_block = blockchain.last_block
+    last_proof = last_block['proof']
+    proof = blockchain.proof_of_work(last_proof)
 
+    blockchain.generate_transaction(
+        coin_type=CoinType.RewardCoin,
+        trans_type=TransType.ISSUE,
+        sender='0',
+        recipient=server_public_key.exportKey(),
+        amount=1,
+    )
+
+    previous_hash = blockchain.hash(last_block)
+    block = blockchain.create_block(proof, previous_hash)
+
+    response = {
+        'message': "New Block Created",
+        'index': block['index'],
+        'transactions': block['transactions'],
+        'proof': block['proof'],
+        'previous_hash': block['previous_hash']
+    }
+    return json.dumps(response)
+
+@WiBlock.route('/nodes/register', methods=['POST'])
+def register_nodes():
+    values = request.get_json()
+    nodes = values.get('nodes')
+    if nodes is None:
+        return 'Invalid list of nodes', 400
+
+    for node in nodes:
+        blockchain.register_node(node)
+
+    response = {
+        'message': 'New nondes have been added',
+        'total_nodes': list(blockchain.nodes),
+    }
+
+    return json.dumps(response)
+
+@WiBlock.route('/nodes/resolve', methods=['GET'])
+def consensus():
+    replaced = blockchain.resolve_conflicts()
+
+    if replaced:
+        response = {
+            'message': 'Replaced',
+            'new_chain': blockchain.chain,
+        }
+    else:
+        response = {
+            'message': 'Authoritative',
+            'chain': blockchain.chain,
+        }
+
+    return json.dumps(response)
 class AuthCoin:
     def __init__(self, public_key, info):
         self.id = str(uuid.uuid4())

@@ -111,21 +111,22 @@ def register():
 
     wallet = AuthWallet(info=info)
     #Todo register for AP
-    #message = {'public_key': wallet.pub_file, 'info': info, 'address': wallet.address}
-    #data = json.dumps(message)
-    #data = data.encode()
-    #length = len(data)
-    #enc_data = {}
-    #import math
-    #for i in range(math.ceil(length / 128)):
-    #    start = i * 128
-    #    end = start + 128
-    #    if end >= length:
-    #        end = -1
-    #    enc_data[i] = str(server_public_key.encrypt(data[start: end], 32)[0])
-    ##enc_data = server_public_key.encrypt(data, 32)
-    #handle_data(json.dumps(enc_data).encode())
+    message = {'public_key': wallet.pub_file, 'info': info, 'address': wallet.address}
+    data = json.dumps(message)
+    data = data.encode()
+    length = len(data)
+    enc_data = {}
+    import math
+    for i in range(math.ceil(length / 128)):
+        start = i * 128
+        end = start + 128
+        if end >= length:
+            end = -1
+        enc_data[i] = str(server_public_key.encrypt(data[start: end], 32)[0])
+    #enc_data = server_public_key.encrypt(data, 32)
 
+    res = requests.post('http://127.0.0.1:5000/register4AP', data=json.dumps(enc_data).encode())
+    assert 'success_message' in json.loads(res.text)
 
 wallet = None
 import os
@@ -164,6 +165,13 @@ def handle_data(data, ip, port):
     global user_public_keys
     data_decoded = data.decode()
     
+    try:
+        assert data_decoded == 'Disconnect Request'
+        res = json.dumps(wallet.auth_coins[(ip, port)])
+        return res
+    except:
+        pass
+
     try:
         dic_data = json.loads(data_decoded)
     except:
@@ -244,7 +252,6 @@ from threading import Thread
 
 
 class ClientThread(Thread):
-
     def __init__(self,ip,port):
         Thread.__init__(self)
         self.ip = ip

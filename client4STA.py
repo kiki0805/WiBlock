@@ -11,14 +11,32 @@ s.setblocking(0)
 
 REGISTERED = False
 wallet = None
+AUTHCOIN_RECEIVED = False
+
+
+def validate_tx():
+    import requests
+    transactions = requests.get('http://127.0.0.1:5000/transactions/current').text
+    transactions = json.loads(transactions)['current_transactions']
+
+    for tx in transactions:
+        if tx['sender'] == wallet.pub_file:
+            return True
+    return False
+
 
 def handle_recv(msg_recv):
+    global AUTHCOIN_RECEIVED
     msg_encoded = msg_recv.encode()
     dic_data = json.loads(msg_encoded)
 
     if 'success_message' in dic_data:
         #Todo connect and check if TX is broadcasted
         print('Connect Successfully!')
+        valid = validate_tx()
+        if not valid:
+            #Disconnect
+            return
         wallet.auth_coin = None
         return
     elif 'fail_message' in dic_data:
@@ -26,6 +44,8 @@ def handle_recv(msg_recv):
 
     if 'auth_coin' in dic_data:
         #Todo store AuthCoin
+        print('STA received AuthCoin')
+        AUTHCOIN_RECEIVED = True
         wallet.auth_coin = dic_data
         with open('AUTHCOIN', 'wb') as ac_f:
             ac_f.write(msg_encoded)
@@ -257,4 +277,14 @@ while True:
         time.sleep(5)
 
 
+import atexit
+def exit_handler():
+    global AUTHCOIN_RECEIVED
+    AUTHCOIN_RECEIVED = False
+    speak('Disconnect Request'.encode())
+    print('Waiting for AuthCoin...')
+    while not AUTHCOIN_RECEIVED:
+        time.sleep(1)
+    print('Disconnected. Goodbye!')
+atexit.register(exit_handler)
 
