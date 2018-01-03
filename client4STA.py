@@ -1,12 +1,55 @@
 
+############# options setting ####################
+import sys, getopt, os
+from get_host_ip import get_host_ip
+from validate_port import validate_port
+
+opts, args = getopt.getopt(sys.argv[1:], 'hp:s:k:')
+socket_host = ''
+socket_port = 4000
+server_host = None
+server_port = None
+
+port = None
+for op, value in opts:
+    if op == '-p':
+        server_port = eval(value)
+    elif op == '-s':
+        server_host = value
+    elif op == '-k':
+        socket_host = value
+    elif op == '-h':
+        print('Usage:\n\tpython client4STA.py -s server_host -p server_port -k socket_host')
+        sys.exit()
+    else:
+        print('Unknown parameter(s).')
+        sys.exit()
+
+if not server_port:
+    print('Please set server port. Use -h for help.')
+    sys.exit()
+
+if server_host == '':
+    print('Please set server host. Use -h for help.')
+    sys.exit()
+
+if socket_host == '':
+    print('Please set socket host. Use -h for help.')
+    sys.exit()
+
+print('Socket connects at {host}:{port}...'.format(host=socket_host, port=str(socket_port)))
+
+
+################## options setting #######################
+
+
+
 ################### BEGIN SOKCET #########################
 
 import socket,select,sys,threading,time
 
-HOST='localhost'
-PORT=4000
 s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-s.connect((HOST,PORT))
+s.connect((socket_host,socket_port))
 s.setblocking(0)
 
 REGISTERED = False
@@ -16,7 +59,7 @@ AUTHCOIN_RECEIVED = False
 
 def validate_tx():
     import requests
-    transactions = requests.get('http://127.0.0.1:5000/transactions/current').text
+    transactions = requests.get('http://{host}:{port}/transactions/current'.format(host=server_host, port=server_port)).text
     transactions = json.loads(transactions)['current_transactions']
 
     for tx in transactions:
@@ -53,6 +96,8 @@ def handle_recv(msg_recv):
         return
 
     signature = wallet.privkey.sign(SHA256.new(msg_encoded).digest(), '')
+    if not wallet.auth_coin:
+        print('No AUTHCOIN  NOW: ' + msg_recv)
     data = {}
     data['raw'] = json.loads(msg_recv)
     data['signature'] = signature
@@ -99,14 +144,12 @@ def close_sock(s):
 ############## END SOCKET #####################
 
 
-from secp256k1 import PrivateKey, PublicKey
 from Crypto.PublicKey import RSA
 from Crypto.Hash import SHA256
 from Crypto import Random
 import hashlib
 import base58
 import uuid
-import rsa
 import json
 
 
@@ -139,8 +182,6 @@ class AuthWallet(object):
 
     @staticmethod
     def generate_keys():
-        # privkey = PrivateKey()
-        # pubkey = privkey.pubkey
         random_generator = Random.new().read
         privkey = RSA.generate(1024, random_generator)
         pubkey = privkey.publickey()

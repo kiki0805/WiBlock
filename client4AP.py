@@ -1,15 +1,49 @@
-import socketserver
+############# options setting ####################
+import sys, getopt, os
+from get_host_ip import get_host_ip
+from validate_port import validate_port
+
+opts, args = getopt.getopt(sys.argv[1:], 'hp:s:')
+host = get_host_ip()
+socket_port = 4000
+server_host = None
+server_port = None
+
+port = None
+for op, value in opts:
+    if op == '-p':
+        server_port = eval(value)
+    elif op == '-s':
+        server_host = value
+    elif op == '-h':
+        print('Usage:\n\tpython client4AP.py -s server_host -p server_port')
+        sys.exit()
+    else:
+        print('Unknown parameter(s).')
+        sys.exit()
+
+if not server_port:
+    print('Please set server port. Use -h for help.')
+    sys.exit()
+
+if server_host == '':
+    print('Please set server port. Use -h for help.')
+    sys.exit()
+
+print('Socket opens at {host}:{port}...'.format(host=host, port=str(socket_port)))
+
+
+################## options setting #######################
+
 from CONSTANTS import CoinType, TransType
 import json
 import requests
 
-from secp256k1 import PrivateKey, PublicKey
 from Crypto.PublicKey import RSA
 from Crypto import Random
 import hashlib
 import base58
 import uuid
-import rsa
 
 
 user_public_keys = {}
@@ -42,8 +76,6 @@ class AuthWallet(object):
 
     @staticmethod
     def generate_keys():
-        # privkey = PrivateKey()
-        # pubkey = privkey.pubkey
         random_generator = Random.new().read
         privkey = RSA.generate(1024, random_generator)
         pubkey = privkey.publickey()
@@ -91,7 +123,7 @@ def get_mac_address():
     return ":".join([mac[e:e+2] for e in range(0,11,2)])
 
 def register():
-    global wallet
+    global wallet, server_host, server_port
     MAC = get_mac_address()
 
     print('Fill your information...')
@@ -125,13 +157,12 @@ def register():
         enc_data[i] = str(server_public_key.encrypt(data[start: end], 32)[0])
     #enc_data = server_public_key.encrypt(data, 32)
 
-    res = requests.post('http://127.0.0.1:5000/register4AP', data=json.dumps(enc_data).encode())
+    res = requests.post('http://{host}:{port}/register4AP'.format(host=server_host, port=server_port), data=json.dumps(enc_data).encode())
     assert 'success_message' in json.loads(res.text)
 
 wallet = None
-import os
 files = os.listdir(os.getcwd())
-if 'AP_PRIVATE' in files and 'AP_PUBLIC' in files:
+if 'AP_PRIVATE' in files and 'AP_PUBLIC' in files and 'AP_ADDRESS' in files:
     wallet = AuthWallet(info=None, empty=True)
     with open('AP_PRIVATE', 'r') as priv_f:
         privkey = RSA.importKey(priv_f.read())
@@ -159,16 +190,26 @@ else:
 ########## ABOVE is AP WALLET GENERATOR #################
 
 def handle_data(data, ip, port):
+    #return reponse and if_disconnect
     #data_decoded = data.decode()
     #res = generate_transaction(data_decoded)
     #return res
-    global user_public_keys
+    from Crypto.Hash import SHA256
+    global user_public_keys, server_host, server_port
     data_decoded = data.decode()
     
     try:
         assert data_decoded == 'Disconnect Request'
         res = json.dumps(wallet.auth_coins[(ip, port)])
-        return res
+        transaction = generate_transaction(user_public_keys[(ip, port)], send=True)
+        signature = wallet.privkey.sign(SHA256.new(transaction.encode()).digest(), '')
+        data = {}
+        data['raw'] = json.loads(transaction)
+        data['signature'] = signature
+        res_from_server = requests.post('http://{host}:{port}/transactions/generate'.format(host=server_host, port=server_port), data=json.dumps(data).encode())
+        assert res_from_server.status_code == 200
+        del wallet.auth_coins[(ip, port)]
+        return res, True
     except:
         pass
 
@@ -178,12 +219,12 @@ def handle_data(data, ip, port):
         print('Receive public_key. To generate TX')
         res = generate_transaction(data_decoded)
         user_public_keys[(ip, port)] = data_decoded
-        return res
+        return res, False
 
     if '0' in dic_data:
         print('POST to registrate...')
-        res = requests.post('http://127.0.0.1:5000/register', data=data)
-        return res.text
+        res = requests.post('http://{host}:{port}/register'.format(host=server_host, port=server_port), data=data)
+        return res.text, False
 
     print('Detected signature')
     validate = verify_signature(dic_data, ip, port)
@@ -191,21 +232,21 @@ def handle_data(data, ip, port):
         print('Validation Fail!')
         #Disconnect
         message = {'fail_message': 'Validation Fail!'}
-        return json.dumps(message)
-    res = requests.post('http://127.0.0.1:5000/transactions/generate', data=data)
-    return res.text
+        return json.dumps(message), False
+    res = requests.post('http://{host}:{port}/transactions/generate'.format(host=server_host, port=server_port), data=data)
+    return res.text, False
 
 
 
 def verify_signature(tx_with_sign, ip, port):
-    global user_public_keys
+    global user_public_keys, server_host, server_port
     from Crypto.Hash import SHA256
     user_info = (ip, port)
     auth_coin = tx_with_sign['auth_coin']
     wallet.auth_coins[(ip, port)] = auth_coin
     user_pubkey = RSA.importKey(user_public_keys[(ip, port)])
     #search owner of C
-    owner_public_key = json.loads(requests.get('http://127.0.0.1:5000/coin_owner', data=tx_with_sign['id'].encode()).text)
+    owner_public_key = json.loads(requests.get('http://{host}:{port}/coin_owner'.format(host=server_host, port=server_port), data=tx_with_sign['id'].encode()).text)
     if owner_public_key['public_key'] != user_public_keys[(ip, port)]: return False
     auth_coin_content = auth_coin['auth_coin']
     server_signature = auth_coin['signature']
@@ -213,7 +254,15 @@ def verify_signature(tx_with_sign, ip, port):
     return validate
 
 
-def generate_transaction(public_key):
+def generate_transaction(public_key, send=False):
+    if send:
+        transaction = {'coin_type': CoinType.AuthCoin,
+            'trans_type': TransType.DISCONNECT,
+            'sender': wallet.pub_file,
+            'recipient': public_key,
+            'amount': 1}
+        return json.dumps(transaction)
+
     transaction = {'coin_type': CoinType.AuthCoin,
             'trans_type': TransType.CONNECT,
             'sender': public_key,
@@ -222,31 +271,6 @@ def generate_transaction(public_key):
     return json.dumps(transaction)
 
 
-#class MyTCPHandler(socketserver.BaseRequestHandler):
-#    """
-#    The request handler class for our server.
-#
-#    It is instantiated once per connection to the server, and must
-#    override the handle() method to implement communication to the
-#    client.
-#    """
-#
-#    def handle(self):
-#        # self.request is the TCP socket connected to the client
-#        self.data = self.request.recv(9000).strip()
-#        response = handle_data(self.data)
-#        # just send back the same data, but upper-cased
-#        self.request.sendall(response.encode())
-
-#HOST, PORT = "localhost", 4000
-
-#import socket
-#server_socket = socket.socket()
-#server_socket.bind((HOST, PORT))
-#server_socket.listen(3)
-#conn, address = server
-
-##############test socket
 import socket, select
 from threading import Thread
 
@@ -263,20 +287,19 @@ class ClientThread(Thread):
         while True:
             data = conn.recv(9999)
             if not data: break
-            response = handle_data(data, self.ip, self.port)
+            response, diconnect = handle_data(data, self.ip, self.port)
             #print(response)
             if not response:
                 continue
+            if diconnect:
+                print(response)
             conn.send(response.encode())
 
-TCP_IP = '0.0.0.0'
-TCP_PORT = 4000
-BUFFER_SIZE = 9999  # Normally 1024
 threads = []
 
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server_socket.bind(("0.0.0.0", 4000))
+server_socket.bind((host, socket_port))
 server_socket.listen(10)
 
 read_sockets, write_sockets, error_sockets = select.select([server_socket], [], [])
@@ -290,13 +313,4 @@ while True:
 
 for t in threads:
     t.join()
-
-############test scoket
-
-
-# Create the server, binding to localhost on port 9999
-#with socketserver.TCPServer((HOST, PORT), MyTCPHandler) as server:
-#    # Activate the server; this will keep running until you
-#    # interrupt the program with Ctrl-C
-#    server.serve_forever()
 

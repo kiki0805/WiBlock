@@ -1,17 +1,57 @@
 from time import time
+
+################ options setting ##########################
+
+import sys, getopt, os
+from get_host_ip import get_host_ip
+from validate_port import validate_port
+
+opts, args = getopt.getopt(sys.argv[1:], 'hp:')
+host = get_host_ip()
+
+port = None
+for op, value in opts:
+    if op == '-p':
+        port = eval(value)
+    elif op == '-h':
+        print('Usage:\n\tpython server.py -p CustomizedPort')
+        sys.exit()
+    else:
+        print('Unknown parameter(s).')
+        sys.exit()
+
+if not port:
+    print('Please set port. Use -h for help.')
+    sys.exit()
+
+
+if not validate_port(port):
+    print('Connection refused. Port {} may be occupied. Try to choose another one.'.format(str(port)))
+    sys.exit()
+
+
+print('Running node at ' + host + ':' + str(port) + '...')
+
+
+######################### options setting ##########################
+
+
 from CONSTANTS import CoinType, TransType
 
 ################### BEGIN INDENTIFICATION #################
 
-from secp256k1 import PrivateKey, PublicKey
 from Crypto.PublicKey import RSA
 from Crypto import Random
 import hashlib
 from Crypto.Hash import SHA256
-import base58
 import uuid
-import rsa
 import json
+import requests
+
+files = os.listdir(os.getcwd())
+if 'SERVER_PUBLIC' not in files or 'SERVER_PRIVATE' not in files or 'SERVER_ADDRESS' not in files:
+    os.system('python server_generator.py')
+
 
 server_public_key = None
 with open('SERVER_PUBLIC', 'r') as f:
@@ -66,7 +106,7 @@ class BlockChain(object):
         max_length = len(self.chain)
 
         for node in neighbours:
-            response = requests.get(f'http://{node}/chain')
+            response = requests.get('http://{node}/chain'.format(node=node))
 
             if response.status_code == 200:
                 length = response.json()['length']
@@ -130,12 +170,12 @@ class BlockChain(object):
 
     @staticmethod
     def valid_proof(proof, last_proof):
-        guess = f'{last_proof}{proof}'.encode()
+        guess = '{last_proof}{proof}'.format(last_proof=last_proof, proof=proof).encode()
         guess_hash = hashlib.sha256(guess).hexdigest()
         return guess_hash[:4] == '0000'
 
 
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from peewee import *
 from playhouse.shortcuts import model_to_dict
 
@@ -209,7 +249,7 @@ def register():
 
     blockchain.generate_transaction(coin_type=CoinType.AuthCoin,
             trans_type=TransType.ISSUE,
-            sender=server_public_key.exportKey(),
+            sender=server_public_key.exportKey().decode(),
             recipient=data['public_key'],
             amount=1)
     return json_data
@@ -272,7 +312,7 @@ def mine():
         coin_type=CoinType.RewardCoin,
         trans_type=TransType.ISSUE,
         sender='0',
-        recipient=server_public_key.exportKey(),
+        recipient=server_public_key.exportKey().decode(),
         amount=1,
     )
 
@@ -286,12 +326,12 @@ def mine():
         'proof': block['proof'],
         'previous_hash': block['previous_hash']
     }
+
     return json.dumps(response)
 
 @WiBlock.route('/nodes/register', methods=['POST'])
 def register_nodes():
-    values = request.get_json()
-    nodes = values.get('nodes')
+    nodes = json.loads(request.data.decode())['nodes']
     if nodes is None:
         return 'Invalid list of nodes', 400
 
@@ -329,6 +369,6 @@ class AuthCoin:
 
 
 db.close()
-WiBlock.run(host='0.0.0.0')
+WiBlock.run(host=host, port=port)
 
 
