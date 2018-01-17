@@ -48,5 +48,6 @@ Wi-Fi authentication based on blockchain.
 
 ## Reference
 
+- https://hackernoon.com/learn-blockchains-by-building-one-117428612f46
 - http://ieeexplore.ieee.org/document/7800479/
 - Sanda, Tomoyuki, and H. Inaba. "Proposal of new authentication method in Wi-Fi access using Bitcoin 2.0." Consumer Electronics, 2016 IEEE, Global Conference on IEEE, 2016:1-5.
