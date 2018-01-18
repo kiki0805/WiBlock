@@ -1,0 +1,301 @@
+
+############# options setting ####################
+import sys, getopt, os
+from get_host_ip import get_host_ip
+from validate_port import validate_port
+
+opts, args = getopt.getopt(sys.argv[1:], 'hp:s:k:')
+socket_host = ''
+socket_port = 4000
+server_host = None
+server_port = None
+EXCEPTION = False
+
+port = None
+for op, value in opts:
+    if op == '-p':
+        server_port = eval(value)
+    elif op == '-s':
+        server_host = value
+    elif op == '-k':
+        socket_host = value
+    elif op == '-h':
+        print('Usage:\n\tpython client4STA.py -s server_host -p server_port -k socket_host')
+        sys.exit()
+    else:
+        print('Unknown parameter(s).')
+        sys.exit()
+
+if not server_port:
+    print('Please set server port. Use -h for help.')
+    sys.exit()
+
+if server_host == '':
+    print('Please set server host. Use -h for help.')
+    sys.exit()
+
+if socket_host == '':
+    print('Please set socket host. Use -h for help.')
+    sys.exit()
+
+print('Socket connects at {host}:{port}...'.format(host=socket_host, port=str(socket_port)))
+
+
+################## options setting #######################
+
+
+
+################### BEGIN SOKCET #########################
+
+import socket,select,sys,threading,time
+
+s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+s.connect((socket_host,socket_port))
+s.setblocking(0)
+
+REGISTERED = False
+wallet = None
+AUTHCOIN_RECEIVED = False
+
+
+def validate_tx():
+    import requests
+    transactions = requests.get('http://{host}:{port}/transactions/current'.format(host=server_host, port=server_port)).text
+    transactions = json.loads(transactions)['current_transactions']
+
+    for tx in transactions:
+        if tx['sender'] == wallet.pub_file:
+            return True
+    return False
+
+
+def handle_recv(msg_recv):
+    global AUTHCOIN_RECEIVED, EXCEPTION
+    msg_encoded = msg_recv.encode()
+    dic_data = json.loads(msg_encoded)
+
+    if 'success_message' in dic_data:
+        #Todo connect and check if TX is broadcasted
+        print('Connect Successfully!')
+        valid = validate_tx()
+        if not valid:
+            #Disconnect
+            return
+        wallet.auth_coin = None
+        return
+    elif 'fail_message' in dic_data:
+        return
+
+    if 'auth_coin' in dic_data:
+        #Todo store AuthCoin
+        print('AuthCoin Existed')
+        return
+
+    signature = wallet.privkey.sign(SHA256.new(msg_encoded).digest(), '')
+    if not wallet.auth_coin:
+        print('No AUTHCOIN  NOW: TODO')
+    data = {}
+    data['raw'] = json.loads(msg_recv)
+    data['signature'] = signature
+    data['auth_coin'] = wallet.auth_coin
+    auth_coin_enc = wallet.auth_coin['auth_coin']
+    json_auth_coin = json.loads(auth_coin_enc)
+    auth_coin = b''
+    for i in range(len(json_auth_coin)):
+        auth_coin += wallet.privkey.decrypt(eval(json_auth_coin[str(i)]))
+    auth_coin += b'}'
+    try:
+        auth_coin = json.loads(auth_coin.decode())
+    except:
+        EXCEPTION = True
+        print('Decrypt fail!')
+        sys.exit()
+    data['id'] = auth_coin['id'] 
+    speak(json.dumps(data).encode())
+
+
+def speak(msg):
+    global s
+    s.send(msg)
+
+
+def start_read():
+	global s
+	while 1:
+		rlist = [s]
+		# Get the list sockets which are readable
+		read_list, write_list, error_list = select.select(rlist , [], [])
+		for sock in read_list:
+			#incoming message from remote server
+			if sock == s:
+				data = sock.recv(9999)
+				astr = data.decode()
+				if astr != "":
+					handle_recv(astr)
+		time.sleep(0.1)
+
+
+t = threading.Thread(target=start_read)
+t.start()
+
+
+def close_sock(s):
+	s.close()
+
+############## END SOCKET #####################
+
+
+from Crypto.PublicKey import RSA
+from Crypto.Hash import SHA256
+from Crypto import Random
+import hashlib
+import base58
+import uuid
+import json
+
+
+server_public_key = None
+with open('SERVER_PUBLIC', 'r') as f:
+    server_pub_file = f.read()
+    server_public_key = RSA.importKey(server_pub_file)
+    f.close()
+
+
+class AuthWallet(object):
+    def __init__(self, info, empty=False):
+        self.auth_coin = None
+        if empty:
+            self.privkey, self.pubkey, self.private_key, self.public_key, self.pub_file = None, None, None, None, None
+            self.address = None
+            self.info = None
+            return
+        self.privkey, self.pubkey, self.private_key, self.public_key, self.pub_file = self.generate_keys()
+        self.address = self.generate_address(self.public_key)
+        self.info = info
+        # {
+        #     'MAC': ,
+        #     'Username': ,
+        #     'Email': ,
+        #     'Tel': ,
+        #     'Message': ,
+        #     ...
+        # }
+
+    @staticmethod
+    def generate_keys():
+        random_generator = Random.new().read
+        privkey = RSA.generate(1024, random_generator)
+        pubkey = privkey.publickey()
+        with open('PRIVATE', 'wb') as f:
+            f.write(privkey.exportKey())
+            f.close()
+        with open('PUBLIC', 'wb') as f:
+            f.write(pubkey.exportKey())
+            f.close()
+        f = open('PRIVATE', 'r')
+        priv_file = f.read()
+        priv = priv_file.split('\n')
+        priv.remove('-----BEGIN RSA PRIVATE KEY-----')
+        priv.remove('-----END RSA PRIVATE KEY-----')
+        private_key = ''.join(priv)
+        f.close()
+
+        f = open('PUBLIC', 'r')
+        pub_file = f.read()
+        pub = pub_file.split('\n')
+        pub.remove('-----BEGIN PUBLIC KEY-----')
+        pub.remove('-----END PUBLIC KEY-----')
+        public_key = ''.join(pub)
+        f.close()
+        
+        return privkey, pubkey, private_key, public_key, pub_file
+
+    @staticmethod
+    def generate_address(public_key):
+        public_key_bi = public_key.encode()
+        addr_sha256 = hashlib.sha256(public_key_bi).digest()
+        h = hashlib.new('ripemd160')
+        h.update(addr_sha256)
+        head_added = b'0' + h.digest()
+        tail = hashlib.sha256(hashlib.sha256(head_added).digest()).digest()[:4]
+        address = base58.b58encode(head_added + tail)
+        with open('ADDRESS', 'w') as f:
+            f.write(address)
+            f.close()
+        return address
+
+
+def get_mac_address(): 
+    mac=uuid.UUID(int = uuid.getnode()).hex[-12:]
+    return ":".join([mac[e:e+2] for e in range(0,11,2)])
+
+
+def register():
+    global wallet
+    MAC = get_mac_address()
+
+    print('Fill your information...')
+    print('(optional, press <Enter> to skip)')
+    username = input('Username: ')
+    email = input('Email: ')
+    tel = input('Tel: ')
+    message = input('Message: ')
+
+    info = {
+        'MAC': MAC,
+        'Username': username,
+        'Email': email,
+        'Tel': tel,
+        'Message': message,
+    }
+
+    wallet = AuthWallet(info=info)
+    with open('AUTHCOIN', 'r') as ac_f:
+        auth_coin = ac_f.read()
+        wallet.auth_coin = eval(auth_coin)
+        ac_f.close()
+
+
+import os
+files = os.listdir(os.getcwd())
+if 'AUTHCOIN' in files:
+    print('==============STA REGISTER=================')
+    register()
+    print('===========STA REGISTRATION FINISH=========')
+    REGISTERED = True
+else:
+    print('No AuthCoin')
+
+
+while not REGISTERED:
+    time.sleep(3)
+
+time.sleep(1)
+
+while True:
+    confirm_connect = input('Do you want to connect?(y/N)\n')
+    if confirm_connect == 'y':
+        message = wallet.pub_file.encode()
+        #connect to AP and notifies AP public
+        speak(message)
+        break
+    else:
+        print('System will ask for connection every five seconds...')
+        time.sleep(5)
+
+
+import atexit
+def exit_handler():
+    global AUTHCOIN_RECEIVED, EXCEPTION, s
+    AUTHCOIN_RECEIVED = False
+    speak('Disconnect Request'.encode())
+    print('Waiting for AuthCoin...')
+    while not AUTHCOIN_RECEIVED:
+        if EXCEPTION:
+            print('Exception occurred.')
+            break
+        time.sleep(1)
+    s.close()
+    print('Disconnected. Goodbye!')
+atexit.register(exit_handler)
+

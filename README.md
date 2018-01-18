@@ -29,6 +29,11 @@ Wi-Fi authentication based on blockchain.
 - `python client4STA.py -p server_port -s server_ip -k AP_ip`
 
 
+## stolen_authcoin.py
+
+- 在 STA 端生成 AUTHCOIN 后，运行 `stolen_authcoin.py` 可模拟盗取 AuthCoin 的攻击。
+
+
 ## Todo
 
 - 结合硬件连接
